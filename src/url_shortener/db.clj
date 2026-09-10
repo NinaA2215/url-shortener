@@ -1,15 +1,12 @@
 (ns url-shortener.db
-  ;; Loading JDBC namespaces
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
 
-;; Making a map, tells JDBC how to connect to database
 (def db-configuration {:dbtype "sqlite" :dbname "shortener.db"})
 
-;; Reads configuration and produces database object
 (def ds (jdbc/get-datasource db-configuration))
 
-(defn create-table! []
+(defn create-table! [ds]
   (jdbc/execute! ds
                  ["CREATE TABLE IF NOT EXISTS links (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -18,15 +15,17 @@
         created_at TEXT DEFAULT CURRENT_TIMESTAMP
       )"]))
 
-(defn insert-link! [code url]
-  (jdbc/execute! ds
-                 ["INSERT INTO links (code, original_url) VALUES (?, ?)" code url]))
+(defn insert-link! [ds code url]
+  (try
+    (jdbc/execute! ds
+                   ["INSERT INTO links (code, original_url) VALUES (?, ?)" code url])
+    code
+    (catch org.sqlite.SQLiteException e
+      (if (= (.getResultCode e) org.sqlite.SQLiteErrorCode/SQLITE_CONSTRAINT_UNIQUE)
+        :collision
+        (throw e)))))
 
-(defn find-by-code [code]
+(defn find-by-code [ds code]
   (jdbc/execute-one! ds
-                     ["SELECT * FROM links WHERE code = ?" code]
+                     ["SELECT code, original_url, created_at FROM links WHERE code = ?" code]
                      {:builder-fn rs/as-unqualified-maps}))
-
-
-
-
