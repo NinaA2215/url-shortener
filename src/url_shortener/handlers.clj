@@ -104,7 +104,11 @@
             (catch RuntimeException _
               {:status 500
                :headers {"Content-Type" "application/json"}
-               :body (json/generate-string {:error "Unable to generate unique short code."})})))))))
+               :body (json/generate-string {:error "Unable to generate unique short code."})})
+            (catch java.sql.SQLException _
+              {:status 500
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:error "Database error occurred."})})))))))
 
 (defn redirect-handler [ds request]
   (let [code (get-in request [:path-params :code])
