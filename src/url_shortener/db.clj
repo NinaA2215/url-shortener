@@ -2,18 +2,18 @@
   (:require [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]))
 
-(def db-configuration {:dbtype "sqlite" :dbname "shortener.db"})
+(def db-configuration {:dbtype "sqlite"
+                       :dbname "shortener.db"})
 
 (def ds (jdbc/get-datasource db-configuration))
 
 (defn create-table! [ds]
   (jdbc/execute! ds
                  ["CREATE TABLE IF NOT EXISTS links (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        original_url TEXT NOT NULL,
-        created_at TEXT DEFAULT CURRENT_TIMESTAMP
-      )"]))
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 code TEXT UNIQUE NOT NULL,
+                 original_url TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)"]))
 
 (defn insert-link! [ds code url]
   (try
