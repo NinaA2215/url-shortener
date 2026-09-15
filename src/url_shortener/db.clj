@@ -29,3 +29,25 @@
   (jdbc/execute-one! ds
                      ["SELECT code, original_url, created_at FROM links WHERE code = ?" code]
                      {:builder-fn rs/as-unqualified-maps}))
+
+(defn create-click-table! [ds]
+  (jdbc/execute! ds
+                 ["CREATE TABLE IF NOT EXISTS clicks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 link_code TEXT NOT NULL,
+                 clicked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 FOREIGN KEY (link_code) REFERENCES links(code))"]))
+
+(defn record-click! [ds code]
+    (jdbc/execute! ds
+                   ["INSERT INTO clicks (link_code) VALUES (?)" code]))
+
+(defn return-clicks [ds code]
+  (jdbc/execute-one! ds
+                     ["SELECT links.original_url, links.created_at,
+                     COUNT(clicks.id) AS clicks_count,
+                     MAX(clicks.clicked_at) AS last_accessed
+                     FROM links
+                     LEFT JOIN clicks ON clicks.link_code = links.code WHERE links.code = ?
+                     GROUP BY links.code" code]
+                     {:builder-fn rs/as-unqualified-maps}))
