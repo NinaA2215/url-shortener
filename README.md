@@ -4,6 +4,7 @@ A URL shortener built in Clojure with JSON API and a browser based HTML interfac
 The app supports two ways to create a link:
 - With JSON API using a POST request 
 - Through HTML form at '/'
+
 App includes input validation so blank, missing or malformed URLs and aliases are rejected before saving to database. If random generated code already exists in the database, it retries set amount of times. Errors like malformed JSON, URLs, taken aliases or duplicate codes are handled cleanly without causing the app to crash. The app has a full test suite covering the database layer, request handlers and routing logic.
 
 ## Tech stack
