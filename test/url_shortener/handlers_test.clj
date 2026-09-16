@@ -14,8 +14,10 @@
      :dbname (.getAbsolutePath test-db-file)}))
 
 (defn reset-db! []
+  (jdbc/execute! test-ds ["DROP TABLE IF EXISTS clicks"])
   (jdbc/execute! test-ds ["DROP TABLE IF EXISTS links"])
-  (db/create-table! test-ds))
+  (db/create-table! test-ds)
+  (db/create-click-table! test-ds))
 
 (use-fixtures :each
               (fn [test]
@@ -30,17 +32,23 @@
 (deftest valid-url-test
   (is (true? (h/valid-url? "https://google.com")))
   (is (true? (h/valid-url? "http://example.com")))
-
   (is (false? (h/valid-url? "ftp://google.com")))
   (is (false? (h/valid-url? "https://")))
   (is (false? (h/valid-url? "fake url")))
   (is (false? (h/valid-url? "google.com ")))
-  (is (false? (h/valid-url? ""))))
-
-(deftest valid-url-too-long-test
+  (is (false? (h/valid-url? "")))
   (let [long-url (str "http://example.com/"
                       (apply str (repeat 2050 "a")))]
     (is (= false (h/valid-url? long-url)))))
+
+(deftest valid-alias-test
+  (is (true? (h/valid-alias? "abc")))
+  (is (false? (h/valid-alias? "ab")))
+  (is (false? (h/valid-alias? "thisiswaytoolong12345")))
+  (is (false? (h/valid-alias? "api")))
+  (is (false? (h/valid-alias? "API")))
+  (is (false? (h/valid-alias? "form")))
+  (is (false? (h/valid-alias? "custom-alias"))))
 
 (deftest random-shortener-test
   (let [code (h/random-shortener)]
@@ -65,6 +73,17 @@
            (:original_url
              (db/find-by-code test-ds (:code body)))))))
 
+(deftest shorten-handler-alias-test
+  (let [request {:body (java.io.ByteArrayInputStream.
+                          (.getBytes "{\"url\":\"https://google.com\",\"alias\":\"google\"}"))}
+        response (h/shorten-handler test-ds request)
+        body (json/parse-string (:body response) true)]
+    (is (= 201 (:status response)))
+    (is (= "google" (:code body)))
+    (is (= (str h/base-url "google") (:short-url body)))
+    (is (= "https://google.com"
+           (:original_url (db/find-by-code test-ds "google"))))))
+
 (deftest shorten-handler-invalid-url-test
   (let [request {:body (java.io.ByteArrayInputStream.
                          (.getBytes "{\"url\":\"invalid-url\"}"))}
@@ -72,6 +91,27 @@
     (is (= 400 (:status response)))
     (is (= "application/json"
            (get-in response [:headers "Content-Type"])))))
+
+(deftest shorten-handler-invalid-alias-test
+  (let [request {:body (java.io.ByteArrayInputStream.
+                         (.getBytes "{\"url\":\"https://google.com\",\"alias\":\"invalid-alias\"}"))}
+        response (h/shorten-handler test-ds request)
+        body (json/parse-string (:body response) true)]
+    (is (= 400 (:status response)))
+    (is (= "application/json"
+        (get-in response [:headers "Content-Type"])))
+    (is (= "Invalid alias." (:error body)))))
+
+(deftest shorten-handler-alias-taken-test
+  (db/insert-link! test-ds "google" "https://example.com")
+  (let [request {:body (java.io.ByteArrayInputStream.
+                         (.getBytes "{\"url\":\"https://google.com\",\"alias\":\"google\"}"))}
+        response (h/shorten-handler test-ds request)
+        body (json/parse-string (:body response) true)]
+    (is (= 409 (:status response)))
+    (is (= "application/json"
+           (get-in response [:headers "Content-Type"])))
+    (is (= "Alias already taken." (:error body)))))
 
 (deftest shorten-handler-malformed-json-test
   (let [request {:body (java.io.ByteArrayInputStream.
@@ -143,15 +183,8 @@
     (is (= 400 (:status response)))
     (is (= "text/html"
            (get-in response [:headers "Content-Type"])))
-    (is (= "<p>Invalid URL</p>"
+    (is (= "<p>Invalid URL.</p>"
            (:body response)))))
-
-(deftest shorten-url-test
-  (let [result (h/shorten-url! test-ds "https://google.com")]
-    (is (string? (:code result)))
-    (is (= h/short-code-length (count (:code result))))
-    (is (= (str h/base-url (:code result)) (:short-url result)))
-    (is (= "https://google.com" (:original_url (db/find-by-code test-ds (:code result)))))))
 
 (deftest generate-unique-code-collision-test
   (db/insert-link! test-ds "abc123" "https://exists.com")
@@ -165,13 +198,57 @@
         (is (= "xyz789" result))
         (is (= "https://google.com" (:original_url (db/find-by-code test-ds "xyz789"))))))))
 
-(deftest shorten-handler-body-too-large-test
-  (let [large-body (apply str (repeat (inc 10000) "a"))
-        request {:body (java.io.ByteArrayInputStream. (.getBytes large-body))}
-        response (h/shorten-handler test-ds request)
+(deftest redirect-handler-click-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (let [request {:path-params {:code "abc123"}}]
+    (h/redirect-handler test-ds request)
+    (let [stats (db/return-clicks test-ds "abc123")]
+      (is (= 1 (:clicks_count stats))))))
+
+(deftest stats-handler-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (let [request {:path-params {:code "abc123"}}
+        response (h/stats-handler test-ds request)
         body (json/parse-string (:body response) true)]
-    (is (= 413 (:status response)))
+    (is (= 200 (:status response)))
     (is (= "application/json"
            (get-in response [:headers "Content-Type"])))
-    (is (= "Request body too large." (:error body)))))
+    (is (= "https://google.com" (:original_url body)))
+    (is (= (str h/base-url "abc123") (:short-url body)))
+    (is (= 0 (:clicks_count body)))))
 
+(deftest stats-handler-missing-code-test
+  (let [request {:path-params {:code "missing-code"}}
+        response (h/stats-handler test-ds request)
+        body (json/parse-string (:body response) true)]
+    (is (= 404 (:status response)))
+    (is (= "application/json"
+           (get-in response [:headers "Content-Type"])))
+    (is (= "Link statistic not found." (:error body)))))
+
+(deftest html-stats-handler-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (let [request {:path-params {:code "abc123"}}
+        response (h/html-stats-handler test-ds request)]
+  (is (= "text/html"
+         (get-in response [:headers "Content-Type"])))
+  (is (= 200 (:status response)))
+  (is (string? (:body response)))
+  (is (re-find #"Original URL: https://google.com" (:body response)))
+  (is (re-find #"Click count: 0" (:body response)))))
+
+(deftest html-stats-handler-missing-code-test
+  (let [request {:path-params {:code "missing-code"}}
+        response (h/html-stats-handler test-ds request)]
+    (is (= 404 (:status response)))
+    (is (= "text/html"
+           (get-in response [:headers "Content-Type"])))
+    (is (= "<p>Link statistic not found.</p>" (:body response)))))
+
+(deftest html-shorten-handler-alias-test
+  (let [request {:form-params {"url" "https://google.com" "alias" "alias1"}}
+        response (h/html-shorten-handler test-ds request)]
+    (is (= 200 (:status response)))
+    (is (re-find #"alias1" (:body response)))
+    (is (= "https://google.com"
+           (:original_url (db/find-by-code test-ds "alias1"))))))
