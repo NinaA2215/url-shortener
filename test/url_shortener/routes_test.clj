@@ -13,8 +13,10 @@
      :dbname (.getAbsolutePath test-db-file)}))
 
 (defn reset-db! []
+  (jdbc/execute! test-ds ["DROP TABLE IF EXISTS clicks"])
   (jdbc/execute! test-ds ["DROP TABLE IF EXISTS links"])
-  (db/create-table! test-ds))
+  (db/create-table! test-ds)
+  (db/create-click-table! test-ds))
 
 (use-fixtures :each
               (fn [test]
@@ -46,7 +48,7 @@
     (is (= "application/json"
            (get-in response [:headers "Content-Type"]))))))
 
-(deftest redirect--route-test
+(deftest redirect-route-test
   (db/insert-link! test-ds "abc123" "https://exists.com")
   (with-redefs [db/ds test-ds]
     (let [request {:request-method :get
@@ -68,4 +70,22 @@
       (is (= "text/html"
              (get-in response [:headers "Content-Type"]))))))
 
+(deftest stats-api-route-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (with-redefs [db/ds test-ds]
+    (let [request {:request-method :get
+                   :uri "/api/stats/abc123"}
+          response (app request)]
+      (is (= 200 (:status response)))
+      (is (= "application/json"
+             (get-in response [:headers "Content-Type"]))))))
 
+(deftest html-stats-route-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (with-redefs [db/ds test-ds]
+    (let [request {:request-method :get
+                   :uri "/stats/abc123"}
+          response (app request)]
+      (is (= 200 (:status response)))
+      (is (= "text/html"
+             (get-in response [:headers "Content-Type"]))))))
