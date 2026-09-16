@@ -22,6 +22,7 @@
    :body (str (h/html
                 [:form {:method "post" :action "/form/shorten"}
                  [:input {:type "text" :name "url"}]
+                 [:input {:type "text" :name "alias" :placeholder "Custom alias is optional"}]
                  [:button {:type "submit"} "Shorten"]]))})
 
 (defn random-shortener []
@@ -115,11 +116,13 @@
   (let [code (get-in request [:path-params :code])
         link (db/find-by-code ds code)]
     (if link
-      {:status 302
-       :headers {"Location" (:original_url link)}}
-      {:status 404
-       :headers {"Content-Type" "text/plain"}
-       :body "Short link not found"})))
+        (do
+          (db/record-click! ds code)
+          {:status 302
+           :headers {"Location" (:original_url link)}})
+        {:status 404
+        :headers {"Content-Type" "text/plain"}
+        :body "Short link not found"})))
 
 (defn html-shorten-handler [ds request]
   (let [body (:form-params request)
@@ -143,5 +146,39 @@
               {:status 200
                :headers {"Content-Type" "text/html"}
                :body (str (h/html
-                            [:a {:href (:short-url result)}
-                             (:short-url result)]))}))))))
+                            [:ul
+                             [:li [:a {:href (:short-url result)} (:short-url result)]]
+                             [:li [:a {:href (str "/stats/" (:code result))} "Link stats "]]
+                             ]))}))))))
+
+(defn stats-handler [ds request]
+  (let [code (get-in request [:path-params :code])
+        stats (db/return-clicks ds code)]
+    (if (= nil stats)
+      {:status 404
+       :headers {"Content-Type" "application/json"}
+       :body (json/generate-string {:error "Link statistic not found."})}
+      (let [response {:original_url (:original_url stats)
+                      :short-url (str base-url code)
+                      :clicks_count (:clicks_count stats)
+                      :last_accessed (:last_accessed stats)
+                      :created_at (:created_at stats)}]
+        {:status 200
+         :headers {"Content-Type" "application/json"}
+         :body (json/generate-string response)}))))
+
+(defn html-stats-handler [ds request]
+  (let [code (get-in request [:path-params :code])
+        stats (db/return-clicks ds code)]
+    (if (= nil stats)
+      {:status 404
+       :headers {"Content-Type" "text/html"}
+       :body "<p>Link statistic not found.</p>"}
+      {:status 200
+       :headers {"Content-Type" "text/html"}
+       :body (str (h/html [:ul
+                           [:li (str "Original URL: " (:original_url stats))]
+                           [:li (str "Short URL: " (str base-url code))]
+                           [:li (str "Click count: " (:clicks_count stats))]
+                           [:li (str "Last accessed: " (:last_accessed stats))]
+                           [:li (str "Created at: " (:created_at stats))]]))})))
