@@ -13,8 +13,8 @@
 (def letters "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 (def short-code-length 6)
 (def max-code-generation-attempts 5)
-(def max-request-body-size 10000)
 (def max-url-length 2048)
+(def reserved-aliases #{"api" "form"})
 
 (defn html-handler [_]
   {:status 200
@@ -39,10 +39,16 @@
                  (inc attempts))
           code)))))
 
-(defn shorten-url! [ds url]
-  (let [code (generate-unique-code! ds url)]
-    {:code code
-     :short-url (str base-url code)}))
+(defn shorten-url! [ds url alias]
+    (if (str/blank? alias)
+      (let [code (generate-unique-code! ds url)]
+        {:code code
+         :short-url (str base-url code)})
+      (let [result (db/insert-link! ds alias url)]
+        (if (= :collision result)
+          ::alias-taken
+          {:code alias
+           :short-url (str base-url alias)}))))
 
 (defn valid-url? [^String url]
   (try
@@ -56,59 +62,54 @@
     (catch MalformedURLException _
       false)))
 
-(defn read-request-body [request]
-  (let [body (:body request)
-        buffer (byte-array 4096)
-        output (java.io.ByteArrayOutputStream.)]
-    (loop []
-      (let [read-bytes (.read body buffer)]
-        (cond
-          (= read-bytes -1)
-          (.toString output "UTF-8")
-          (> (+ (.size output) read-bytes)
-             max-request-body-size)
-          (throw (IllegalArgumentException. "Request body too large."))
-          :else
-          (do
-            (.write output buffer 0 read-bytes)
-            (recur)))))))
+(defn valid-alias? [^String alias]
+  (try
+    (and (every? #(Character/isLetterOrDigit %) alias)
+         (<= 3 (count alias) 20)
+         (not (contains? reserved-aliases (str/lower-case alias))))
+    (catch IllegalArgumentException _
+      false)))
 
 (defn shorten-handler [ds request]
   (let [body (try
-               (json/parse-string (read-request-body request) true)
+               (json/parse-string (slurp (:body request)) true)
                (catch JsonParseException _
-                 ::invalid-json)
-               (catch IllegalArgumentException _
-                 ::body-too-large))]
+                 ::invalid-json))]
     (cond
-      (= body ::body-too-large)
-      {:status 413
-       :headers {"Content-Type" "application/json"}
-       :body (json/generate-string {:error "Request body too large."})}
       (= body ::invalid-json)
       {:status 400
        :headers {"Content-Type" "application/json"}
        :body (json/generate-string {:error "Invalid JSON."})}
       :else
-      (let [url (:url body)]
+      (let [url (:url body)
+            alias (:alias body)]
         (if (or (str/blank? url)
                 (not (valid-url? url)))
           {:status 400
            :headers {"Content-Type" "application/json"}
            :body (json/generate-string {:error "No Valid URL found."})}
-          (try
-            (let [result (shorten-url! ds url)]
-              {:status 201
-               :headers {"Content-Type" "application/json"}
-               :body (json/generate-string result)})
-            (catch RuntimeException _
-              {:status 500
-               :headers {"Content-Type" "application/json"}
-               :body (json/generate-string {:error "Unable to generate unique short code."})})
-            (catch java.sql.SQLException _
-              {:status 500
-               :headers {"Content-Type" "application/json"}
-               :body (json/generate-string {:error "Database error occurred."})})))))))
+          (if (and (not (str/blank? alias))
+                   (not (valid-alias? alias)))
+            {:status 400
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string {:error "Invalid alias."})}
+            (try
+              (let [result (shorten-url! ds url alias)]
+                (if (= result ::alias-taken)
+                  {:status 409
+                   :headers {"Content-Type" "application/json"}
+                   :body (json/generate-string {:error "Alias already taken."})}
+                  {:status 201
+                   :headers {"Content-Type" "application/json"}
+                   :body (json/generate-string result)}))
+              (catch RuntimeException _
+                {:status 500
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string {:error "Unable to generate unique short code."})})
+              (catch java.sql.SQLException _
+                {:status 500
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string {:error "Database error occurred."})}))))))))
 
 (defn redirect-handler [ds request]
   (let [code (get-in request [:path-params :code])
@@ -122,15 +123,25 @@
 
 (defn html-shorten-handler [ds request]
   (let [body (:form-params request)
-        url (get body "url")]
+        url (get body "url")
+        alias (get body "alias")]
     (if (or (str/blank? url)
             (not (valid-url? url)))
       {:status 400
        :headers {"Content-Type" "text/html"}
-       :body "<p>Invalid URL</p>"}
-      (let [result (shorten-url! ds url)]
-        {:status 200
-         :headers {"Content-Type" "text/html"}
-         :body (str (h/html
-                      [:a {:href (:short-url result)}
-                       (:short-url result)]))}))))
+       :body "<p>Invalid URL.</p>"}
+      (if (and (not (str/blank? alias))
+                (not (valid-alias? alias)))
+          {:status 400
+           :headers {"Content-Type" "text/html"}
+           :body "<p>Invalid alias.</p>"}
+          (let [result (shorten-url! ds url alias)]
+            (if (= ::alias-taken result)
+              {:status 409
+              :headers {"Content-Type" "text/html"}
+              :body "<p>Alias already taken.</p>"}
+              {:status 200
+               :headers {"Content-Type" "text/html"}
+               :body (str (h/html
+                            [:a {:href (:short-url result)}
+                             (:short-url result)]))}))))))
