@@ -21,6 +21,14 @@
          ["/form/shorten"
           {:post (fn [request]
                    (h/html-shorten-handler db/ds request))
-           :middleware [wrap-params]}]])
-      (ring/create-default-handler))
-  )
+           :middleware [wrap-params]}]
+
+         ["/api/stats/:code"
+          {:get (fn [request]
+                  (h/stats-handler db/ds request))}]
+
+         ["/stats/:code"
+          {:get (fn [request]
+                  (h/html-stats-handler db/ds request))}]
+         ])
+      (ring/create-default-handler)))
