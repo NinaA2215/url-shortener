@@ -12,8 +12,10 @@
      :dbname (.getAbsolutePath test-db-file)}))
 
 (defn reset-db! []
+  (jdbc/execute! test-ds ["DROP TABLE IF EXISTS clicks"])
   (jdbc/execute! test-ds ["DROP TABLE IF EXISTS links"])
-  (db/create-table! test-ds))
+  (db/create-table! test-ds)
+  (db/create-click-table! test-ds))
 
 (use-fixtures :each
               (fn [test]
@@ -29,7 +31,11 @@
   (is (some? (jdbc/execute-one! test-ds
                                 ["SELECT name FROM sqlite_master
                                 WHERE type = 'table'
-                                AND name = 'links'"]))))
+                                AND name = 'links'"])))
+  (is (some? (jdbc/execute-one! test-ds
+                                ["SELECT name FROM sqlite_master
+                                WHERE type = 'table'
+                                AND name = 'clicks'"]))))
 
 (deftest insert-and-find-link-test
   (db/insert-link! test-ds "abc123" "https://google.com")
@@ -44,3 +50,13 @@
  (db/insert-link! test-ds "abc123" "https://google.com")
  (is (= :collision
         (db/insert-link! test-ds "abc123" "https://google.com"))))
+
+(deftest click-stats-test
+  (db/insert-link! test-ds "abc123" "https://google.com")
+  (db/record-click! test-ds "abc123")
+  (db/record-click! test-ds "abc123")
+  (let [stats (db/return-clicks test-ds "abc123")]
+    (is (= "https://google.com" (:original_url stats)))
+    (is (= 2 (:clicks_count stats)))
+    (is (some? (:last_accessed stats)))
+    (is (some? (:created_at stats)))))
