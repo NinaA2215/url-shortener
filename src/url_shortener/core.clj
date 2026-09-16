@@ -11,6 +11,7 @@
 
 (defn -main [& args]
   (db/create-table! db/ds)
+  (db/create-click-table! db/ds)
   (println "Server started!")
   (let [server (run-jetty app {:port port
                                :join? false})]
